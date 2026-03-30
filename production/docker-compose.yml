@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgres://user:pass@postgres:5432/fte_db
+  worker:
+    build: .
+    command: python -u production/workers/message_processor.py
+  # Add postgres, kafka services for local development as needed
