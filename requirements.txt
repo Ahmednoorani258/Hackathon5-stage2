@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+asyncpg
+aiokafka
+pydantic
+requests
+pytest
+python-dotenv
+openai-agents
+sentence-transformers

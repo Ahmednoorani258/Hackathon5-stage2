@@ -17,7 +17,7 @@ external_client = AsyncOpenAI(
 )
 
 model = OpenAIChatCompletionsModel(
-    model="qwen/qwen3.6-plus-preview:free",
+    model="qwen/qwen3.6-plus:free",
     openai_client=external_client,
 )
 

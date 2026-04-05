@@ -1,1 +1,74 @@
+# ========================
+# Environment & Secrets
+# ========================
 .env
+.env.*
+!.env.example
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+
+# ========================
+# Virtual Environments
+# ========================
+venv/
+.venv/
+env/
+ENV/
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ========================
+# OS Generated
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Node / Web Form
+# ========================
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================
+# Sentence Transformers Model Cache
+# ========================
+.cache/
+
+# ========================
+# Docker
+# ========================
+*.log
+
+# ========================
+# Testing
+# ========================
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml

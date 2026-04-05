@@ -9,6 +9,27 @@ from production.agent.embeddings import generate_embedding
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
+
+async def resolve_customer_id(conn, identifier: str) -> str:
+    """Resolve an email or phone number to a customer UUID."""
+    # First try treating it as an email
+    cust_id = await conn.fetchval("SELECT id FROM customers WHERE email = $1", identifier)
+    if cust_id: return str(cust_id)
+    
+    # Try as a phone number
+    cust_id = await conn.fetchval("SELECT id FROM customers WHERE phone = $1", identifier)
+    if cust_id: return str(cust_id)
+    
+    # If it already looks like a UUID, return it
+    import re
+    if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', identifier):
+        return identifier
+        
+    # Otherwise, create a new customer
+    cust_id = await conn.fetchval("INSERT INTO customers (email) VALUES ($1) RETURNING id", identifier)
+    return str(cust_id)
+
+# -----------------------------------------------------------------------------
 # 1. Search Knowledge Base
 # -----------------------------------------------------------------------------
 class KnowledgeSearchInput(BaseModel):
@@ -34,6 +55,7 @@ async def search_knowledge_base(input: KnowledgeSearchInput) -> str:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             embedding = await generate_embedding(input.query)
+            embedding_str = '[' + ','.join(map(str, embedding)) + ']'
 
             # Note: Assuming 'embedding' is a JSON string or appropriate vector type for asyncpg
             results = await conn.fetch("""
@@ -43,7 +65,7 @@ async def search_knowledge_base(input: KnowledgeSearchInput) -> str:
                 WHERE ($2::text IS NULL OR category = $2)
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
-            """, embedding, input.category, input.max_results)
+            """, embedding_str, input.category, input.max_results)
 
             if not results:
                 return "No relevant documentation found. Consider escalating to human support."
@@ -84,11 +106,16 @@ async def create_ticket(input: CreateTicketInput) -> str:
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
+            resolved_id = await resolve_customer_id(conn, input.customer_id)
+            
+            # We need a conversation ID first. For simplicity in the tool, we create one if missing.
+            conversation_id = await conn.fetchval("INSERT INTO conversations (customer_id, initial_channel) VALUES ($1::uuid, $2) RETURNING id", resolved_id, input.source_channel)
+            
             ticket_id = await conn.fetchval("""
-                INSERT INTO tickets (customer_id, source_channel, category, priority, status, notes)
-                VALUES ($1, $2, $3, $4, 'open', $5)
+                INSERT INTO tickets (conversation_id, customer_id, source_channel, category, priority, status, resolution_notes)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5, 'open', $6)
                 RETURNING id
-            """, input.customer_id, input.source_channel, input.category, input.priority, input.notes)
+            """, conversation_id, resolved_id, input.source_channel, input.category, input.priority, input.notes)
 
             return f"Ticket created successfully. Ticket ID: {ticket_id}"
 
@@ -118,13 +145,14 @@ async def get_customer_history(input: GetCustomerHistoryInput) -> str:
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
+            resolved_id = await resolve_customer_id(conn, input.customer_id)
             conversations = await conn.fetch("""
                 SELECT initial_channel, started_at, status, sentiment_score
                 FROM conversations
-                WHERE customer_id = $1
+                WHERE customer_id = $1::uuid
                 ORDER BY started_at DESC
                 LIMIT 5
-            """, input.customer_id)
+            """, resolved_id)
 
             if not conversations:
                 return "No previous interaction history found for this customer."
@@ -144,7 +172,7 @@ async def get_customer_history(input: GetCustomerHistoryInput) -> str:
 # -----------------------------------------------------------------------------
 class EscalateToHumanInput(BaseModel):
     """Input schema for escalating a ticket to human support."""
-    ticket_id: int
+    ticket_id: str
     reason: str
 
 @function_tool
@@ -170,8 +198,9 @@ async def escalate_to_human(input: EscalateToHumanInput) -> str:
             # Update the ticket status to 'escalated'
             await conn.execute("""
                 UPDATE tickets
-                SET status = 'escalated', notes = CONCAT(notes, '\\nEscalation Reason: ', $2::text)
-                WHERE id = $1
+                SET status = 'escalated', resolution_notes = CONCAT(COALESCE(resolution_notes, ''), '
+Escalation Reason: ', $2::text)
+                WHERE id = $1::uuid
             """, input.ticket_id, input.reason)
 
             return f"Ticket {input.ticket_id} has been escalated to a human. Reason: {input.reason}"
@@ -185,7 +214,7 @@ async def escalate_to_human(input: EscalateToHumanInput) -> str:
 # -----------------------------------------------------------------------------
 class SendResponseInput(BaseModel):
     """Input schema for sending a response to a customer."""
-    ticket_id: int
+    ticket_id: str
     message: str
     channel: str
 
@@ -215,7 +244,7 @@ async def send_response(input: SendResponseInput) -> str:
         async with pool.acquire() as conn:
             # Get conversation_id for this ticket
             conversation_id = await conn.fetchval("""
-                SELECT conversation_id FROM tickets WHERE id = $1
+                SELECT conversation_id FROM tickets WHERE id = $1::uuid
             """, input.ticket_id)
 
             if conversation_id:
