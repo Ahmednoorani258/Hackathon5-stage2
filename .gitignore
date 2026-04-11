@@ -72,3 +72,77 @@ yarn-error.log*
 htmlcov/
 .coverage
 coverage.xml
+
+# ========================
+# Claude / Local tooling
+# ========================
+.claude/
+clog/
+
+# ========================
+# Credentials & OAuth tokens
+# ========================
+credentials.json
+token.json
+last_history_id.txt
+*.bak
+*.backup
+*.pem
+*.crt
+*.key
+
+# ========================
+# Sandbox artifacts
+# ========================
+**/__pycache__/
+**/.pytest_cache/
+
+# ========================
+# Misc / Logs
+# ========================
+*.log
+logs/**
+*.sqlite
+*.db
+
+# ========================
+# Local config
+# ========================
+*.local
+*.local.*
+*.dev.json
+
+# ========================
+# FastAPI / Uvicorn auto-generated
+# ========================
+uvicorn.pid
+
+# ========================
+# Cloud credentials / OAuth tokens
+# ========================
+*.json.token
+*.json.credentials
+
+# ========================
+# VS Code local history
+# ========================
+.history/
+workspaceStorage/
+
+# ========================
+# Temp files
+# ========================
+*.tmp
+*.temp
+~$*
+.DS_Store
+Thumbs.db
+
+# ========================
+# Worktrees and IDE metadata
+# ========================
+.git/modules/**
+*.iml
+.idea/
+.vscode/*
+!.vscode/settings.example.json

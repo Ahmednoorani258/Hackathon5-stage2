@@ -124,6 +124,14 @@ async def create_ticket(input: CreateTicketInput) -> str:
         return "Failed to create ticket."
 
 # -----------------------------------------------------------------------------
+# 2b. Create Ticket (IDE Alias)
+# -----------------------------------------------------------------------------
+@function_tool
+async def create_ticket_ide(input: CreateTicketInput) -> str:
+    """Alias for create_ticket to support legacy tool calls."""
+    return await create_ticket(input)
+
+# -----------------------------------------------------------------------------
 # 3. Get Customer History
 # -----------------------------------------------------------------------------
 class GetCustomerHistoryInput(BaseModel):
@@ -217,6 +225,9 @@ class SendResponseInput(BaseModel):
     ticket_id: str
     message: str
     channel: str
+    to_email: Optional[str] = None
+    thread_id: Optional[str] = None
+    subject: Optional[str] = None
 
 @function_tool
 async def send_response(input: SendResponseInput) -> str:
@@ -235,11 +246,47 @@ async def send_response(input: SendResponseInput) -> str:
         Status message about the response delivery.
     """
     try:
-        # In a real implementation, this would route to the specific channel's
-        # outbound API (e.g., Gmail API, Twilio API).
+        # Send the response via the specific channel's outbound API
         logger.info(f"Sending response for ticket {input.ticket_id} via {input.channel}: {input.message}")
 
-        # We would also log this message in the messages table
+        if input.channel == "email" and input.to_email:
+            import os
+            import asyncio
+            from production.channels.gmail_handler import GmailHandler
+
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            creds_path = os.environ.get("GMAIL_CREDENTIALS_PATH", os.path.join(base_dir, "credentials.json"))
+            token_path = os.environ.get("GMAIL_TOKEN_PATH", os.path.join(base_dir, "token.json"))
+
+            try:
+                handler = GmailHandler(creds_path, token_path)
+                # Ensure the subject always starts with "Re:" for threading
+                subject = input.subject or "Support Reply"
+                if not subject.startswith("Re:"):
+                    subject = "Re: " + subject
+
+                # The Gmail library is sync, but we use an async wrapper or just call it if it was modified
+                logger.info(f"Dispatching email to {input.to_email}")
+                if asyncio.iscoroutinefunction(handler.send_reply):
+                    await handler.send_reply(
+                        to_email=input.to_email,
+                        subject=subject,
+                        body=input.message,
+                        thread_id=input.thread_id
+                    )
+                else:
+                    handler.send_reply(
+                        to_email=input.to_email,
+                        subject=subject,
+                        body=input.message,
+                        thread_id=input.thread_id
+                    )
+                logger.info(f"Email reply sent successfully to {input.to_email}")
+            except Exception as mail_error:
+                logger.error(f"Failed to dispatch email: {mail_error}")
+
+        # We log this message in the messages table
+
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             # Get conversation_id for this ticket
