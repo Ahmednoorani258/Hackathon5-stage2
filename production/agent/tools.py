@@ -175,6 +175,12 @@ async def get_customer_history(input: GetCustomerHistoryInput) -> str:
         logger.error(f"Failed to fetch customer history: {e}")
         return "Failed to fetch customer history."
 
+@function_tool
+async def get_customer_history_ide(input: GetCustomerHistoryInput) -> str:
+    """Alias for get_customer_history to support legacy tool calls."""
+    return await get_customer_history(input)
+
+
 # -----------------------------------------------------------------------------
 # 4. Escalate to Human
 # -----------------------------------------------------------------------------
@@ -249,7 +255,8 @@ async def send_response(input: SendResponseInput) -> str:
         # Send the response via the specific channel's outbound API
         logger.info(f"Sending response for ticket {input.ticket_id} via {input.channel}: {input.message}")
 
-        if input.channel == "email" and input.to_email:
+        # Web form submissions should ALSO send an email receipt
+        if input.channel in ("email", "web_form") and input.to_email:
             import os
             import asyncio
             from production.channels.gmail_handler import GmailHandler
@@ -261,25 +268,35 @@ async def send_response(input: SendResponseInput) -> str:
             try:
                 handler = GmailHandler(creds_path, token_path)
                 # Ensure the subject always starts with "Re:" for threading
-                subject = input.subject or "Support Reply"
+                subject = input.subject or f"Support Reply (Ticket {input.ticket_id})"
                 if not subject.startswith("Re:"):
                     subject = "Re: " + subject
 
+                # Gmail API only accepts its own specific hex string thread IDs.
+                # If the thread_id is just our UUID ticket_id or "unknown", we must set it to None
+                # so Gmail creates a new email thread.
+                valid_thread_id = input.thread_id
+                if valid_thread_id:
+                    import re
+                    # Gmail thread IDs are usually 16 char hex strings. If it doesn't look like that, discard it.
+                    if not re.match(r'^[0-9a-fA-F]{15,20}$', valid_thread_id):
+                        valid_thread_id = None
+
                 # The Gmail library is sync, but we use an async wrapper or just call it if it was modified
-                logger.info(f"Dispatching email to {input.to_email}")
+                logger.info(f"Dispatching email to {input.to_email} with thread_id={valid_thread_id}")
                 if asyncio.iscoroutinefunction(handler.send_reply):
                     await handler.send_reply(
                         to_email=input.to_email,
                         subject=subject,
                         body=input.message,
-                        thread_id=input.thread_id
+                        thread_id=valid_thread_id
                     )
                 else:
                     handler.send_reply(
                         to_email=input.to_email,
                         subject=subject,
                         body=input.message,
-                        thread_id=input.thread_id
+                        thread_id=valid_thread_id
                     )
                 logger.info(f"Email reply sent successfully to {input.to_email}")
             except Exception as mail_error:
@@ -299,6 +316,12 @@ async def send_response(input: SendResponseInput) -> str:
                     INSERT INTO messages (conversation_id, channel, direction, role, content)
                     VALUES ($1, $2, 'outbound', 'agent', $3)
                 """, conversation_id, input.channel, input.message)
+
+                # Update the ticket status to resolved since we replied
+                await conn.execute("""
+                    UPDATE tickets SET status = 'resolved', resolved_at = NOW()
+                    WHERE id = $1::uuid AND status = 'open'
+                """, input.ticket_id)
 
         return f"Response sent successfully via {input.channel}."
 

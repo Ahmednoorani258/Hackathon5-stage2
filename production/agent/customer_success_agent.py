@@ -11,6 +11,7 @@ from production.agent.tools import (
     create_ticket,
     create_ticket_ide,
     get_customer_history,
+    get_customer_history_ide,
     escalate_to_human,
     send_response
 )
@@ -26,6 +27,7 @@ def create_customer_success_agent() -> Agent:
             create_ticket,
             create_ticket_ide,
             get_customer_history,
+            get_customer_history_ide,
             search_knowledge_base,
             send_response,
             escalate_to_human
@@ -62,7 +64,7 @@ Message:
 "{text}"
 
 Please follow your Required Workflow. When you decide to reply to the customer, you MUST use the send_response tool.
-For email channel responses, you MUST provide the following arguments to send_response:
+For email and web_form channel responses, you MUST provide the following arguments to send_response:
 - to_email: Use the 'Customer Email' provided above.
 - subject: Use the 'Subject' provided above.
 - thread_id: Use the 'Thread ID' provided above to ensure the reply stays in the same thread.
@@ -71,7 +73,9 @@ For email channel responses, you MUST provide the following arguments to send_re
     logger.info(f"Running agent for customer {customer_id} on channel {channel}")
 
     try:
+        logger.info(f"Running Runner.run for customer {customer_id}")
         result = await Runner.run(agent, user_prompt, run_config=config)
+        logger.info(f"Runner completed with final output length: {len(result.final_output) if result.final_output else 0}")
         return {
             "status": "success",
             "agent_output": result.final_output,
@@ -79,7 +83,7 @@ For email channel responses, you MUST provide the following arguments to send_re
             "customer_id": customer_id
         }
     except Exception as e:
-        logger.error(f"Agent execution failed: {e}")
+        logger.error(f"Agent execution failed: {e}", exc_info=True)
         return {
             "status": "error",
             "error": str(e)
@@ -87,15 +91,28 @@ For email channel responses, you MUST provide the following arguments to send_re
 
 
 def handle_customer_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Synchronous wrapper for local/manual usage."""
+    """Synchronous wrapper safe for worker/background threads."""
+    loop = None
     try:
-        return asyncio.run(handle_customer_message_async(msg))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(handle_customer_message_async(msg))
     except RuntimeError:
-        # If already in an event loop, caller should use async variant
         return {
             "status": "error",
             "error": "handle_customer_message called inside an active event loop; use handle_customer_message_async"
         }
+    finally:
+        if loop is not None:
+            try:
+                loop.close()
+            finally:
+                asyncio.set_event_loop(None)
+
+
+async def run_agent_sync_threadsafe(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Compatibility async wrapper for call sites expecting async name."""
+    return await handle_customer_message_async(msg)
 
 if __name__ == "__main__":
     # Setup basic logging

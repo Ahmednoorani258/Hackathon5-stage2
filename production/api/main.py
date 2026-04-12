@@ -1,6 +1,7 @@
 """FastAPI app for channel endpoints and health checks."""
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import base64
 import logging
@@ -14,6 +15,20 @@ from production.agent.customer_success_agent import handle_customer_message_asyn
 logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Customer Success FTE API")
+
+# CORS — allow the Next.js frontend (dev and deployed) to call the API
+_allowed_origins = os.environ.get(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000",
+).split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _allowed_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(web_form_router, prefix="/api")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,23 +90,59 @@ async def gmail_webhook(request: Request):
             except Exception:
                 pass
 
-            search_id = last_id
             save_last_history_id(new_history_id)
 
             logger.info(f"Processing Gmail notification. History ID: {new_history_id} (Last: {last_id})")
-            emails = await gmail_handler.process_notification({"historyId": search_id})
+            emails = await gmail_handler.process_notification({"historyId": last_id})
             logger.info(f"Found {len(emails)} candidate inbound emails from history delta")
-            
+
+            skip_domains = {
+                "alerts.linkedin.com",
+                "e.linkedin.com",
+                "linkedin.com",
+                "em.indeed.com",
+                "indeed.com",
+                "notifications.github.com",
+                "no-reply.atlassian.com",
+                "mailer-daemon.googlemail.com",
+                "mailer-daemon.gmail.com",
+            }
+            skip_keywords = {
+                "noreply",
+                "no-reply",
+                "do-not-reply",
+                "donotreply",
+                "automated",
+                "notification",
+                "notifications",
+                "alert",
+                "digest",
+                "newsletter",
+                "jobalert",
+                "job-alert",
+                "linkedin",
+                "indeed",
+                "glassdoor",
+            }
+
             for email_data in emails:
-                sender = email_data.get("customer_email", "").lower()
-                # Skip automated emails and job alerts
-                skip_keywords = [
-                    "noreply", "no-reply", "automated", "notifications",
-                    "glassdoor", "indeed", "linkedin", "jobalert", "digest"
-                ]
-                if any(x in sender for x in skip_keywords):
-                    logger.info(f"Skipping automated email/alert from {sender}")
+                sender = (email_data.get("customer_email") or "").strip().lower()
+                sender_domain = sender.split("@")[-1] if "@" in sender else ""
+
+                if sender_domain in skip_domains or any(k in sender for k in skip_keywords):
+                    logger.info(
+                        "Skipped automated inbound email from sender=%s domain=%s",
+                        sender,
+                        sender_domain,
+                    )
                     continue
+
+                if not sender:
+                    logger.info("Skipped inbound email with empty sender")
+                    continue
+
+                logger.info("Accepted inbound customer email from sender=%s domain=%s", sender, sender_domain)
+
 
                 msg_payload = {
                     "channel": "email",
