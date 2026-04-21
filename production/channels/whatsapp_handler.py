@@ -42,10 +42,15 @@ class WhatsAppHandler:
         # Ensure phone number is in WhatsApp format
         if not to_phone.startswith('whatsapp:'):
             to_phone = f'whatsapp:{to_phone}'
+            
+        # Ensure from number is in WhatsApp format
+        from_phone = self.whatsapp_number
+        if from_phone and not from_phone.startswith('whatsapp:'):
+            from_phone = f'whatsapp:{from_phone}'
         
         message = self.client.messages.create(
             body=body,
-            from_=self.whatsapp_number,
+            from_=from_phone,
             to=to_phone
         )
         

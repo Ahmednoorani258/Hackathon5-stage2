@@ -25,8 +25,13 @@ async def resolve_customer_id(conn, identifier: str) -> str:
     if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', identifier):
         return identifier
         
-    # Otherwise, create a new customer
-    cust_id = await conn.fetchval("INSERT INTO customers (email) VALUES ($1) RETURNING id", identifier)
+    # Otherwise, check if it's an email or phone and insert accordingly
+    if "@" in identifier:
+        cust_id = await conn.fetchval("INSERT INTO customers (email) VALUES ($1) RETURNING id", identifier)
+    else:
+        # Assume it's a phone number
+        cust_id = await conn.fetchval("INSERT INTO customers (phone) VALUES ($1) RETURNING id", identifier)
+        
     return str(cust_id)
 
 # -----------------------------------------------------------------------------
@@ -301,6 +306,45 @@ async def send_response(input: SendResponseInput) -> str:
                 logger.info(f"Email reply sent successfully to {input.to_email}")
             except Exception as mail_error:
                 logger.error(f"Failed to dispatch email: {mail_error}")
+
+        # WhatsApp outbound
+        if input.channel == "whatsapp":
+            from production.channels.whatsapp_handler import WhatsAppHandler
+            from production.agent.formatters import format_for_whatsapp
+
+            try:
+                pool = await get_db_pool()
+                async with pool.acquire() as conn:
+                    # Try to get phone from customers table or ticket's customer_id field
+                    customer_data = await conn.fetchrow("""
+                        SELECT c.phone, c.email, t.customer_id
+                        FROM tickets t
+                        LEFT JOIN customers c ON t.customer_id = c.id
+                        WHERE t.id = $1::uuid
+                    """, input.ticket_id)
+
+                customer_phone = None
+                if customer_data:
+                    # In case the phone number was accidentally stored in the email column due to old bugs
+                    customer_phone = customer_data['phone'] or customer_data['email']
+                    
+                    # Ensure it's not a UUID
+                    if customer_phone and '-' in customer_phone and len(customer_phone) > 30:
+                        customer_phone = None
+                        
+                    # Fallback to customer_id if somehow we still don't have it (though this will fail Twilio)
+                    if not customer_phone:
+                        customer_phone = customer_data['customer_id']
+
+                if customer_phone:
+                    handler = WhatsAppHandler()
+                    formatted_msg = format_for_whatsapp(input.message)
+                    await handler.send_message(to_phone=str(customer_phone), body=formatted_msg)
+                    logger.info(f"WhatsApp message sent successfully to {customer_phone}")
+                else:
+                    logger.error(f"Could not find phone number for ticket {input.ticket_id}")
+            except Exception as wa_error:
+                logger.error(f"Failed to dispatch WhatsApp message: {wa_error}")
 
         # We log this message in the messages table
 

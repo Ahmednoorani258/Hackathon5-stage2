@@ -5,3 +5,4 @@ aiokafka
 pydantic
 requests
 pytest
+twilio
